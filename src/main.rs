@@ -1,4 +1,4 @@
-use std::fmt::Write;
+use std::{fmt::Write, num::ParseIntError};
 
 fn main() {
     println!("{}", welcome_msg());
@@ -23,15 +23,70 @@ fn game_loop() {
     // - continue after 3 secs
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Coordinate(u16, u16);
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BoardCommandError {
+    MalformedString,
+    MalformedCoordinate,
+    CoordinateParsing(ParseIntError),
+    NotFound,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BoardCommand {
     Pass,
+    Quit,
     ClearMark(Coordinate),
     SetMarkFlag(Coordinate),
     SetMarkNote(Coordinate),
     Explore(Coordinate),
+}
+
+impl TryFrom<&str> for BoardCommand {
+    type Error = BoardCommandError;
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        let value = value.to_lowercase().trim().to_string();
+
+        if value == "pass" {
+            return Ok(BoardCommand::Pass);
+        }
+
+        if value == "quit" {
+            return Ok(BoardCommand::Quit);
+        }
+
+        let command_coordinate = value
+            .split_once('(')
+            .ok_or(BoardCommandError::MalformedString)?;
+
+        let value = command_coordinate.1;
+
+        let value = value.trim();
+        let (value_x, value_y) = value
+            .split_once(',')
+            .ok_or(BoardCommandError::MalformedCoordinate)?;
+
+        let value_x = value_x
+            .parse::<u16>()
+            .map_err(|err| BoardCommandError::CoordinateParsing(err))?;
+
+        let value_y = value_y.replace(&['\n', ')'], "").trim().to_string();
+        let value_y = value_y
+            .parse::<u16>()
+            .map_err(|err| BoardCommandError::CoordinateParsing(err))?;
+
+        let command = command_coordinate.0.trim();
+
+        match command {
+            "clear" => Ok(BoardCommand::ClearMark(Coordinate(value_x, value_y))),
+            "flag" => Ok(BoardCommand::SetMarkFlag(Coordinate(value_x, value_y))),
+            "note" => Ok(BoardCommand::SetMarkNote(Coordinate(value_x, value_y))),
+            "explore" => Ok(BoardCommand::Explore(Coordinate(value_x, value_y))),
+            _ => Err(BoardCommandError::NotFound),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,6 +150,7 @@ impl Default for GameConfiguration {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum GameResolve {
+    Quit,
     Continue,
     MineHit,
     AllMinesDiscovered,
@@ -120,6 +176,7 @@ impl GameBoard {
 
     pub fn manipulate_cell(&mut self, command: BoardCommand) -> GameResolve {
         let command_result = match command {
+            BoardCommand::Quit => GameResolve::Quit,
             BoardCommand::Pass => GameResolve::Continue,
             BoardCommand::ClearMark(coordinate) => self.clear_mark(coordinate),
             BoardCommand::SetMarkFlag(coordinate) => self.set_mark_flag(coordinate),
@@ -248,5 +305,83 @@ impl GameBoard {
                 queue.push(Coordinate(x as u16, y as u16))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn create_command_test() {
+        let command = "pass";
+        assert_eq!(BoardCommand::Pass, command.try_into().unwrap());
+
+        let command = "quit";
+        assert_eq!(BoardCommand::Quit, command.try_into().unwrap());
+
+        let command = "clear(0, 0)";
+        assert_eq!(
+            BoardCommand::ClearMark(Coordinate(0, 0)),
+            command.try_into().unwrap()
+        );
+
+        let command = "note(2,1)";
+        assert_eq!(
+            BoardCommand::SetMarkNote(Coordinate(2, 1)),
+            command.try_into().unwrap()
+        );
+
+        let command = "flag(100, 21)";
+        assert_eq!(
+            BoardCommand::SetMarkFlag(Coordinate(100, 21)),
+            command.try_into().unwrap()
+        );
+
+        let command = "explore(20, 20)";
+        assert_eq!(
+            BoardCommand::Explore(Coordinate(20, 20)),
+            command.try_into().unwrap()
+        );
+    }
+
+    #[test]
+    fn fail_to_create_command_test() {
+        let command = "asd";
+        let result: Result<BoardCommand, BoardCommandError> = command.try_into();
+        assert_eq!(Err(BoardCommandError::MalformedString), result);
+
+        let command = "mark(10,10,10)";
+        let result: Result<BoardCommand, BoardCommandError> = command.try_into();
+        // not the best way to handle these errors in such a way. One thing is that the msg is lost
+        if let Err(BoardCommandError::CoordinateParsing(_)) = result {
+            assert!(true);
+        } else {
+            assert!(false);
+        }
+
+        let command = "mark(10.10)";
+        let result: Result<BoardCommand, BoardCommandError> = command.try_into();
+        assert_eq!(Err(BoardCommandError::MalformedCoordinate), result);
+
+        let command = "flag(1000_000, 10)";
+        let result: Result<BoardCommand, BoardCommandError> = command.try_into();
+        if let Err(BoardCommandError::CoordinateParsing(_)) = result {
+            assert!(true);
+        } else {
+            assert!(false);
+        }
+
+        let command = "flag((1000, 20))";
+        let result: Result<BoardCommand, BoardCommandError> = command.try_into();
+        if let Err(BoardCommandError::CoordinateParsing(_)) = result {
+            assert!(true);
+        } else {
+            assert!(false);
+        }
+
+        let command = "test(10, 10)";
+        let result: Result<BoardCommand, BoardCommandError> = command.try_into();
+        assert_eq!(Err(BoardCommandError::NotFound), result);
     }
 }
