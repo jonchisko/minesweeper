@@ -1,7 +1,16 @@
-use std::{fmt::Write, num::ParseIntError};
+use std::{
+    fmt::{Display, Write},
+    io::stdin,
+    num::ParseIntError,
+};
+
+use rand;
+use rand::seq::SliceRandom;
 
 fn main() {
     println!("{}", welcome_msg());
+
+    game_loop();
 }
 
 fn welcome_msg() -> &'static str {
@@ -21,6 +30,32 @@ fn game_loop() {
     // - execute command
     // - show command result and start a wait thread that is polled
     // - continue after 3 secs
+
+    let mut game_board = GameBoard::new(GameConfiguration::default());
+    loop {
+        println!("{}", &game_board);
+        let mut cmd = String::new();
+        stdin()
+            .read_line(&mut cmd)
+            .expect("Did not enter a string?!");
+        clear_console();
+
+        if let Ok(cmd) = BoardCommand::try_from(&cmd[..]) {
+            let resolve = game_board.manipulate_cell(cmd);
+            match resolve {
+                GameResolve::Quit => break,
+                GameResolve::Continue => continue,
+                GameResolve::MineHit => {
+                    println!("HIT MINE!");
+                    break;
+                }
+                GameResolve::AllMinesDiscovered => {
+                    println!("YOU WON!");
+                    break;
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -143,7 +178,7 @@ impl Default for GameConfiguration {
         GameConfiguration {
             width: 32,
             height: 32,
-            total_mines: 90,
+            total_mines: 60,
         }
     }
 }
@@ -163,7 +198,7 @@ struct GameBoard {
 }
 
 impl GameBoard {
-    pub fn new(game_configuration: GameConfiguration) -> GameBoard {
+    fn new(game_configuration: GameConfiguration) -> GameBoard {
         GameBoard {
             game_configuration,
             mines_discovered: 0,
@@ -174,7 +209,46 @@ impl GameBoard {
         }
     }
 
-    pub fn manipulate_cell(&mut self, command: BoardCommand) -> GameResolve {
+    fn generate_world(&mut self) {
+        let mut mine_positions: Vec<u32> = (0..(self.game_configuration.h() as u32
+            * self.game_configuration.w() as u32))
+            .collect();
+        mine_positions.shuffle(&mut rand::thread_rng());
+
+        for mine_lin_index in &mine_positions[0..self.game_configuration.total_mines as usize] {
+            self.cells[*mine_lin_index as usize] = BoardCell::Mine(Mark::NoMark);
+        }
+
+        // this one goes through all fields, a bit unnecessary
+        // for row in 0..self.game_configuration.h() {
+        //     for col in 0..self.game_configuration.w() {}
+        // }
+
+        // quiet inefficient, but I am lazy atm
+        for mine_lin_index in &mine_positions[0..self.game_configuration.total_mines as usize] {
+            let mut neighbours: Vec<Coordinate> = vec![];
+            self.add_neighbours(
+                &mut neighbours,
+                Coordinate(
+                    (mine_lin_index / self.game_configuration.w() as u32) as u16,
+                    (mine_lin_index % self.game_configuration.w() as u32) as u16,
+                ),
+            );
+
+            for neighbour in neighbours {
+                let lin_index = self.compute_linear_index(neighbour);
+                self.cells[lin_index] = match &self.cells[lin_index] {
+                    &BoardCell::NoMine(cell_info) => BoardCell::NoMine(CellInfo(
+                        Mark::NoMark,
+                        NeighbourMines(cell_info.1 .0 + 1),
+                    )),
+                    &anything => anything,
+                }
+            }
+        }
+    }
+
+    fn manipulate_cell(&mut self, command: BoardCommand) -> GameResolve {
         let command_result = match command {
             BoardCommand::Quit => GameResolve::Quit,
             BoardCommand::Pass => GameResolve::Continue,
@@ -305,6 +379,50 @@ impl GameBoard {
                 queue.push(Coordinate(x as u16, y as u16))
             }
         }
+    }
+
+    fn get_dimensions(&self) -> (u16, u16) {
+        (self.game_configuration.w(), self.game_configuration.h())
+    }
+
+    fn get_cell_at(&self, coordinate: Coordinate) -> &BoardCell {
+        &self.cells[self.compute_linear_index(coordinate)]
+    }
+}
+
+impl Display for GameBoard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (width, height) = self.get_dimensions();
+
+        for row in 0..height {
+            for col in 0..width {
+                let symbol = match self.get_cell_at(Coordinate(row, col)) {
+                    BoardCell::NoMine(cell_info) => match cell_info.0 {
+                        Mark::NoMark => "|X|".to_string(),
+                        Mark::MarkNote => "|N|".to_string(),
+                        Mark::MarkFlag => "|F|".to_string(),
+                    },
+                    BoardCell::Mine(mark_info) => match mark_info {
+                        Mark::NoMark => "|X|".to_string(),
+                        Mark::MarkNote => "|N|".to_string(),
+                        Mark::MarkFlag => "|F|".to_string(),
+                    },
+                    BoardCell::Explored(neighbour_info) => {
+                        if neighbour_info.0 == 0 {
+                            "| |".to_string()
+                        } else {
+                            format!("|{}|", neighbour_info.0.to_string())
+                        }
+                    }
+                };
+
+                write!(f, "{}", symbol)
+                    .expect("Writing a new symbol failed in game board display.");
+            }
+            write!(f, "\n").expect("Writing new line failed in game board display.");
+        }
+
+        Ok(())
     }
 }
 
