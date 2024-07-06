@@ -2,6 +2,7 @@ use std::{
     fmt::{Display, Write},
     io::stdin,
     num::ParseIntError,
+    time::SystemTime,
 };
 
 use rand;
@@ -31,7 +32,19 @@ fn game_loop() {
     // - show command result and start a wait thread that is polled
     // - continue after 3 secs
 
-    let mut game_board = GameBoard::new(GameConfiguration::default());
+    println!("Enter game config - example: 10 10\nThis means board 10x10 with 10 mines.");
+    let mut config = String::new();
+    stdin()
+        .read_line(&mut config)
+        .expect("Did not enter string?");
+
+    let mut game_board = GameBoard::new(GameConfiguration::try_from(&config[..])
+        .expect("Try again, config should look like the following: 10 10\nFirst one is dimension, second number of mines."));
+
+    game_board.generate_world();
+
+    let now = SystemTime::now();
+
     loop {
         println!("{}", &game_board);
         let mut cmd = String::new();
@@ -55,6 +68,9 @@ fn game_loop() {
                 }
             }
         }
+    }
+    if let Ok(elapsed) = now.elapsed() {
+        println!("Game took {} s.", elapsed.as_secs())
     }
 }
 
@@ -176,10 +192,41 @@ impl GameConfiguration {
 impl Default for GameConfiguration {
     fn default() -> Self {
         GameConfiguration {
-            width: 32,
-            height: 32,
-            total_mines: 60,
+            width: 5,
+            height: 5,
+            total_mines: 10,
         }
+    }
+}
+
+#[derive(Debug)]
+enum GameConfigurationError {
+    MalformedString,
+    MalformedInteger(ParseIntError),
+}
+
+impl TryFrom<&str> for GameConfiguration {
+    type Error = GameConfigurationError;
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        let game_config = value
+            .split_once(" ")
+            .ok_or(GameConfigurationError::MalformedString);
+        let (dimensions, mines) = game_config.unwrap();
+
+        Ok(GameConfiguration {
+            width: dimensions
+                .trim()
+                .parse::<u16>()
+                .or_else(|err| Err(GameConfigurationError::MalformedInteger(err)))?,
+            height: dimensions
+                .trim()
+                .parse::<u16>()
+                .or_else(|err| Err(GameConfigurationError::MalformedInteger(err)))?,
+            total_mines: mines
+                .trim()
+                .parse::<u32>()
+                .or_else(|err| Err(GameConfigurationError::MalformedInteger(err)))?,
+        })
     }
 }
 
@@ -362,8 +409,8 @@ impl GameBoard {
     }
 
     fn add_neighbours(&self, queue: &mut Vec<Coordinate>, center: Coordinate) {
-        for i in -1..1 {
-            for j in -1..1 {
+        for i in -1..=1 {
+            for j in -1..=1 {
                 let x = center.0 as i32 + i;
                 let y = center.1 as i32 + j;
 
@@ -394,7 +441,15 @@ impl Display for GameBoard {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let (width, height) = self.get_dimensions();
 
+        write!(f, "{:>3}", "");
+        for col in 0..width {
+            write!(f, "{:>3}", col);
+        }
+        write!(f, "\n");
+
         for row in 0..height {
+            write!(f, "{:>3}|", row);
+
             for col in 0..width {
                 let symbol = match self.get_cell_at(Coordinate(row, col)) {
                     BoardCell::NoMine(cell_info) => match cell_info.0 {
@@ -416,7 +471,7 @@ impl Display for GameBoard {
                     }
                 };
 
-                write!(f, "{}", symbol)
+                write!(f, "{:>3}", symbol)
                     .expect("Writing a new symbol failed in game board display.");
             }
             write!(f, "\n").expect("Writing new line failed in game board display.");
